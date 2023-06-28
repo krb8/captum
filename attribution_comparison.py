@@ -2,7 +2,7 @@ import gc
 import json
 import sys
 import time
-
+import pickle
 import skimage
 import struct
 import torch
@@ -11,6 +11,8 @@ import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
 
+import unpickle as up
+
 from random import randint
 from PIL import Image
 
@@ -18,7 +20,7 @@ import os
 from my_dataset import my_dataset
 import skimage.io
 
-import TensorState as ts
+#import TensorState as ts
 import reference_probes as refprobes
 
 import matplotlib.pyplot as plt
@@ -242,7 +244,8 @@ def preprocess_round3(img):
     dy = int((w - 224) / 2)
     img = img[dy:dy + 224, dx:dx + 224, :]
 
-     # perform tensor formatting and normalization explicitly
+     # perform
+    # formatting and normalization explicitly
     # convert to CHW dimension ordering
     img = np.transpose(img, (2, 0, 1))
     # convert to NCHW dimension ordering
@@ -798,6 +801,7 @@ def main(model_dirpath,model_filepath, example_images_dirpath, poisoned_example_
         return
 
 
+    up.allLabelNames(unique_labels)
     ####### DEBUG
     # total_items = npy_data_array.shape[0]
     # print(f"> after init: Total: {total_items} items")
@@ -837,9 +841,16 @@ def main(model_dirpath,model_filepath, example_images_dirpath, poisoned_example_
         if npy_data_array is None:
             # valid_dl = fns
             counter = 0
-            num_images_per_batch = 10
+            num_images_per_batch = 9
             batch_counter = 1
             outbatch = []
+
+            batchDict = {}
+
+            #a list of 10000 numbers in the range 0-9. ' \ 'The number at index i indicates the label of the ith image in the array data '
+            batchDict['labels'] = []
+            batchDict['data'] = []
+
             for f in fns:
                 basename = os.path.basename(f)
                 split_str = basename.split("_")
@@ -856,24 +867,44 @@ def main(model_dirpath,model_filepath, example_images_dirpath, poisoned_example_
                 im = Image.open(f)
                 im = (np.array(im))
 
+                # array([1, 2, 3, 4])
                 r = im[:, :, 0].flatten()
                 g = im[:, :, 1].flatten()
                 b = im[:, :, 2].flatten()
-                label = [extracted_label]
+
+                #label = [extracted_label]
+                label = extracted_label
+
 
                 outfilepath = os.path.join(config['OUTPUT_DIRPATH'], '{}'.format('data_batch_'))
                 outfilepath = outfilepath + str(batch_counter)
-                out = np.array(list(label) + list(r) + list(g) + list(b), np.uint8)
-                outbatch.append(out)
+                #out = np.array(list(label) + list(r) + list(g) + list(b), np.uint8)
+
+                ##"data" array is a numpy array, "labels" is regular array
+
+                dataObject = r + g + b
+
+                batchDict['labels'].append(label)
+                batchDict['data'].append(dataObject)
+                # Instead, just append your arrays to a Python list and convert it at the end; ^^^
+
+                #out = np.array(list(label) + list(r) + list(g) + list(b), np.uint8)
+                #outbatch.append(out)
 
                 if(counter > num_images_per_batch):
-                    #outbatch.tofile(outfilepath)
-                    np.save(outfilepath, outbatch)
+                    #np.save(outfilepath, outbatch)
 
+                    ##convert "data" array in each batch to be numpy
+                    batchDict['data'] = np.asarray(batchDict['data'], dtype=np.uint8)
 
-                    ##TODO: ^^^ pickle this file
+                    with open(outfilepath, 'wb+') as f:
+                        pickle.dump(batchDict, f)
 
+                    batchDict = {}
+                    batchDict['labels'] = []
+                    batchDict['data'] = []
                     outbatch.clear()
+
                     counter = 0
                     batch_counter = batch_counter + 1
 
