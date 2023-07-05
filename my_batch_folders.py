@@ -18,7 +18,7 @@ import time
 import torch
 import numpy as np
 #import class_efficiency
-import attribution_comparison
+import attribution_method
 import csv
 
 
@@ -120,8 +120,11 @@ def batch_efficiency(model_dirpath, result_dirpath, model_format='.pt', example_
         ##################
         # run the efficiency measurement
 
-        attribution_comparison.main(array_model_dir_names[idx], model_filepath[idx], examples_dirpath[idx], poison_dirpath[idx], result_dirpath,
-                               example_img_format) #kb
+        # attribution_comparison.main(array_model_dir_names[idx], model_filepath[idx], examples_dirpath[idx], poison_dirpath[idx], result_dirpath,
+        #                        example_img_format) #kb
+
+        attribution_method.main(model_filepath[idx], examples_dirpath[idx], result_dirpath)
+
         end1 = time.time()
         print('model: ', array_model_dir_names[idx])
         print('total processing time for this model:', (end1-start1))
