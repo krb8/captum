@@ -1,32 +1,22 @@
 import gc
 import json
-import sys
 import time
 import pickle
 import skimage
-import struct
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
-
 import unpickle as up
-
 from random import randint
-from PIL import Image
-
 import os
-from my_dataset import my_dataset
 import skimage.io
-
-#import TensorState as ts
 import reference_probes as refprobes
-
-import matplotlib.pyplot as plt
-
 from PIL import Image
-
+import sys
+from my_dataset import my_dataset
+import attribution_method
+import TensorState as ts ## for 6_28
 
 '''
 save header and metadata information to all output files
@@ -468,6 +458,8 @@ def evaluate_ai_model(efficiency_model, im_class_label, valid_dl, npy_data_array
     if npy_data_array is None:
         # images are loaded from disk
         #losses, accuracies, nums = eval_model(efficiency_model, valid_dl, dev, which_round)
+
+        # TODO: here
         accuracy = eval_model(efficiency_model, valid_dl, dev, which_round)
     else:
         # images are loaded from npy file
@@ -523,8 +515,7 @@ def main(model_dirpath,model_filepath, example_images_dirpath, poisoned_example_
 
     if dev != 'cpu':
         print('current device index:', str(torch.cuda.current_device()) )
-        # print('current device name:', str(torch.cuda.get_device_name(device=﻿0﻿)) )
-        # print('number of cuda devices:', str(torch.cuda.device_count(﻿)) )
+
 
     # this flag is to accommodate folder structure changes between Round 3 and Round 4
     which_round = 4
@@ -664,6 +655,10 @@ def main(model_dirpath,model_filepath, example_images_dirpath, poisoned_example_
     torch.manual_seed(0)
     model = torch.load(model_filepath, map_location=dev)
 
+    #6_28
+    efficiency_model = ts.build_efficiency_model(model, attach_to=config['EFFICIENCY_ATTACH_TO'],
+                                                 method=config['EFFICIENCY_ATTACH_TO_METHOD'])
+
 
     # assume initial that the number of predicted classes is the same as the number of evaluated classes
     number_evaluated_classes = number_predicted_classes
@@ -685,41 +680,14 @@ def main(model_dirpath,model_filepath, example_images_dirpath, poisoned_example_
     # use triggered_fraction.append( float(config_json['triggers'][idx_triggger]['fraction']) and
     # the order of poisoned fraction follwoed by clean fraction
 
-    #TODO : percent originally 1.0, and temp flag was false
     percent = 1.0
 
     num_images_used = int(percent*num_images_used)
-
 
     # determine how the images are stored
     npy_data_array = None
     #temp_flag = False
     temp_flag = True
-
-    # if temp_flag and num_images_used < 1:
-    #     example_img_format = '.npy'
-    #     # this is the case of serialized images into .npy file
-    #     file_npy = [os.path.join(config['SAMPLE_IMAGE_DIRPATH'], fn) for fn in os.listdir(config['SAMPLE_IMAGE_DIRPATH']) if
-    #            fn.endswith(example_img_format)]
-    #     if len(file_npy) > 0:
-    #         print(f"Loading {file_npy[0]}...")
-    #         #npy_data_array = np.load(file_npy[0], allow_pickle=True)
-    #
-    #
-    #
-    #         # print("====  Clean set   ====")
-    #         # fns = read_sample_list(npy_data_array[0])
-    #         # num_images_used = len(fns)
-    #         # print('INFO: clean num_images_used derived from .npy file:', num_images_used)
-    #         #
-    #         # if npy_data_array.shape[0] > 1:
-    #         #     print("==== Poisoned set ====")
-    #         #     fns1 = read_sample_list(npy_data_array[1])
-    #         #     # TODO we could analyze poisoned image separately or together with clean images
-    #
-    #     else:
-    #         print('ERROR: did not find any individual image files nor .npy file in the clean_example_data folder')
-    #         exit(1)
 
     print("NPY array data: ", npy_data_array)
     estimated_number_evaluated_classes = 0
@@ -750,19 +718,6 @@ def main(model_dirpath,model_filepath, example_images_dirpath, poisoned_example_
                 count_unique_labels.append(1)
                 estimated_number_evaluated_classes += 1
 
-            # NOTE: this solution works only for consecutive class labels
-            # if label in unique_labels:
-            #     count_unique_labels[label] +=1
-            # else:
-            #     if label < 0 or label >= number_predicted_classes:
-            #         #count_unique_labels.append(1)
-            #         print('INFO: skipping unexpected label out of range:', label)
-            #         continue
-            #     else:
-            #         count_unique_labels[label] = 1
-            #
-            #     unique_labels.append(label)
-            #     estimated_number_predicted_classes += 1
         else:
             print("ERROR: image file names do not follow expected convention: class_1_example_9.png: ", fns[i])
             continue
@@ -840,8 +795,16 @@ def main(model_dirpath,model_filepath, example_images_dirpath, poisoned_example_
         ################ Prepare images for inference
         if npy_data_array is None:
             # valid_dl = fns
+            ### 6_28 below
+            # extract labels and reshuffle image file names that belong to the same class
+            mydata = {}
+            mydata['test'] = my_dataset(fns)
+            valid_dl = torch.utils.data.DataLoader(mydata['test'], batch_size=num_images_used, shuffle=True,
+                                                   pin_memory=True, num_workers=1)
+            ## 6_28 above ^^^
+
             counter = 0
-            num_images_per_batch = 9
+            num_images_per_batch = 10
             batch_counter = 1
             outbatch = []
 
@@ -851,6 +814,7 @@ def main(model_dirpath,model_filepath, example_images_dirpath, poisoned_example_
             batchDict['labels'] = []
             batchDict['data'] = []
 
+            label_idx = {}
             for f in fns:
                 basename = os.path.basename(f)
                 split_str = basename.split("_")
@@ -861,6 +825,8 @@ def main(model_dirpath,model_filepath, example_images_dirpath, poisoned_example_
                     # label = int(split_str[length - 3])
                     # grab number from filename
                     extracted_label = int(split_str[1])
+                    ## check to see if added to class index yet, if not, add (like count unique labels)
+
                 else:
                     print("error grabbing label")
 
@@ -872,8 +838,11 @@ def main(model_dirpath,model_filepath, example_images_dirpath, poisoned_example_
                 g = im[:, :, 1].flatten()
                 b = im[:, :, 2].flatten()
 
-                #label = [extracted_label]
                 label = extracted_label
+
+                ##add to index if not already included
+                if (str(label) not in label_idx):
+                    label_idx[str(label)] =  [ "class_{}_".format(label) , "Class {}".format(label)]
 
 
                 outfilepath = os.path.join(config['OUTPUT_DIRPATH'], '{}'.format('data_batch_'))
@@ -881,19 +850,14 @@ def main(model_dirpath,model_filepath, example_images_dirpath, poisoned_example_
                 #out = np.array(list(label) + list(r) + list(g) + list(b), np.uint8)
 
                 ##"data" array is a numpy array, "labels" is regular array
-
                 dataObject = r + g + b
 
                 batchDict['labels'].append(label)
                 batchDict['data'].append(dataObject)
                 # Instead, just append your arrays to a Python list and convert it at the end; ^^^
 
-                #out = np.array(list(label) + list(r) + list(g) + list(b), np.uint8)
-                #outbatch.append(out)
 
                 if(counter > num_images_per_batch):
-                    #np.save(outfilepath, outbatch)
-
                     ##convert "data" array in each batch to be numpy
                     batchDict['data'] = np.asarray(batchDict['data'], dtype=np.uint8)
 
@@ -908,7 +872,15 @@ def main(model_dirpath,model_filepath, example_images_dirpath, poisoned_example_
                     counter = 0
                     batch_counter = batch_counter + 1
 
-                counter = counter +1
+                counter = counter +  1
+            ## convert label_idx to JSON and save
+
+            # Serializing json
+            json_object = json.dumps(label_idx)
+
+            # Writing to sample.json
+            with open("troj_class_index_new.json", "w") as outfile:
+                outfile.write(json_object)
 
         else:
             # just pass the list of npy array indices for loading image data
@@ -927,6 +899,10 @@ def main(model_dirpath,model_filepath, example_images_dirpath, poisoned_example_
                 print(f"> beginning Item size: {npy_data_array[0][0].shape}")
 
         print('INFO: evaluate model efficiency and save to directory ', config['OUTPUT_DIRPATH'])
+        print("6_28 below")
+        #evaluate_kldivergence_model(model, number_predicted_classes, valid_dl, npy_data_array, dev,
+         #                           output_filepath, which_round)
+        #attribution_method(model, output_filepath)
 
 
 ######################################################################
@@ -958,3 +934,335 @@ if __name__ == '__main__':
     #main(args.model_dirpath,args.model_filepath, args.example_images_dirpath, args.poisoned_example_images_dirpath, args.output_dirpath, image_format)
     main(args.model_dirpath, args.model_filepath, args.example_images_dirpath, args.poisoned_example_images_dirpath,
          args.output_dirpath, args.example_image_format)
+
+
+######################################### 6_28 below this line
+
+def evaluate_kldivergence_model(efficiency_model, num_predicted_classes, valid_dl, npy_data_array, dev, output_filepath, which_round):
+
+    label_idx = 'all' # used only when images are loaded from npy file
+    accuracy, eval_model_time = evaluate_ai_model(efficiency_model, label_idx, valid_dl,
+                                                                  npy_data_array, dev, which_round)
+
+    for layer in efficiency_model.efficiency_layers:
+        try:
+            num_neurons = layer.max_entropy()
+        except SyntaxError:
+            print('A SyntaxError occurred')
+        except TypeError:
+            print('A TypeError occurred')
+        except ValueError:
+            print('A ValueError occurred!')
+        except ZeroDivisionError:
+            print('Divided by zero?')
+        except Exception:
+            print('ERROR: layer.max_entropy() failed')
+            continue
+
+    num_eval_images = valid_dl.batch_size
+    evaluate_model_efficiency(efficiency_model, num_predicted_classes, num_eval_images, accuracy, eval_model_time, output_filepath)
+
+    #del valid_dl
+    # del losses
+    # del accuracies
+    # del nums
+    if dev != 'cpu':
+        torch.cuda.empty_cache()
+        gc.collect()
+
+
+# '''
+# evaluate model efficiency of an input model over all labels per layer
+# '''
+def evaluate_model_efficiency(efficiency_model, num_predicted_classes, num_eval_images, accuracy, eval_model_time, output_filepath):
+    """ Evaluate model efficiency """
+    # Count the number of states in each layer
+    print()
+    print('evaluate_model_efficiency: Getting the number of states in each layer...')
+    # sanity check for ai model evaluation over all images (all labels) per layer
+    # if type(efficiency_model) != np.int16 and type(efficiency_model) != np.float64:
+    #     print("ERROR: network_efficiency failed:", type(efficiency_model))
+    #     # finish writing to the file
+    #     summary_layers_filepath = output_filepath[0:-4]
+    #     summary_layers_filepath += '_KLdivergenceLabel.csv'
+    #     with open(summary_layers_filepath, 'a') as fh:
+    #         # fh.write('{},'.format(label_idx))
+    #         fh.write('\n')
+    #     KLefficiency_layers_labels_filepath = output_filepath[0:-4]
+    #     KLefficiency_layers_labels_filepath += '_KLdivergenceLayerLabel.csv'
+    #     with open(KLefficiency_layers_labels_filepath, 'a') as fh:
+    #         # fh.write('{},'.format(label_idx))
+    #         fh.write('\n')
+    #     return -1.0
+
+    if len(efficiency_model.efficiency_layers) < 1:
+        print('ERROR: zero number of layers in efficiency_model')
+        return
+
+    start = time.time()
+
+    # save tensor states per probe
+    saveUniqueTensorStates = True
+    saveRawTensorStates = True
+    # Documentation: https://tensorstate.readthedocs.io/en/latest/Reference/Layers.html
+    # https://github.com/Nicholas-Schaub/TensorState/blob/master/examples/PT_LeNet5_Example.py
+    # layer1.2.conv2 (conv2): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+    # class Conv2D: https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html
+    # torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros', device=None, dtype=None)
+
+    print('DEBUG: tensorstates')
+    print(efficiency_model.efficiency_layers[0].counts())
+    print(efficiency_model.efficiency_layers[0].state_ids()[0])
+    print((efficiency_model.efficiency_layers[0].state_ids()[0]).decode('utf-8', errors='replace'))
+    print(list(efficiency_model.efficiency_layers[0].state_ids()[0]))
+
+    # print(struct.calcsize(efficiency_model.efficiency_layers[0].state_ids()[0]))
+    #print('HHH', struct.unpack(efficiency_model.efficiency_layers[0].state_ids()[0]))
+    #print(ts.decompress_states(efficiency_model.efficiency_layers[0].state_ids(),64))
+    #print(ts.compress_states(efficiency_model.efficiency_layers[0].states))
+    if saveUniqueTensorStates:
+        for layer in efficiency_model.efficiency_layers:
+            number_states_filepath = output_filepath[0:-4]
+            number_states_filepath += '_' + layer.name + '_TensorStates.csv'
+            # we have to estimate the byte-encoded bit length of tensor's number of channels
+            num_bytes_stored = len(list(layer.state_ids()[0]))
+            with open(number_states_filepath, 'w') as fh:
+                # 1st row with byte indices plus count/frequency
+                for index1 in range(0, num_bytes_stored):
+                    fh.write('byteindex_{},'.format(str(index1)))
+                fh.write('frequency\n')
+                # 2nd row with min number of cols
+                fh.write('num_eval_images,{:d},'.format(num_eval_images))
+                num_neurons = layer.max_entropy()
+                fh.write('num_neurons,{:d},'.format(int(num_neurons)))
+                for i in range(4, num_bytes_stored):
+                    fh.write('{},'.format(str(-1)))
+                fh.write('-1\n')
+
+                # # 1st row with min number of cols
+                # for i in range(0, num_bytes_stored+1,2):
+                #     fh.write('layer_name, {}, '.format(layer.name))
+                # fh.write('\n')
+                # # 2nd row with min number of cols
+                # for i in range(0, num_bytes_stored+1, 4):
+                #     fh.write('num_eval_images, {}, '.format(num_eval_images))
+                #     num_neurons = layer.max_entropy()
+                #     fh.write('num_neurons, {},'.format(num_neurons))
+                # fh.write('\n')
+
+                print('INFO: len of tensor state ids:', len(layer.state_ids()))
+                print('INFO: len of layer.count():', len(layer.counts()))
+                for tstate in range(0, len(layer.counts())):
+                    # for tstate in range(0, 25): # testing
+                    temp = list(layer.state_ids()[tstate])
+                    for index1 in range(0, len(temp)):
+                        fh.write('{:d}, '.format(temp[index1]))
+                    fh.write('{:d} \n'.format(int(layer.counts()[tstate])))
+                # fh.write('\n')
+
+
+    print(efficiency_model.efficiency_layers[0].state_count)
+    print(efficiency_model.efficiency_layers[0].raw_states[0])
+    print(efficiency_model.efficiency_layers[0].raw_states.array.shape)
+    print(efficiency_model.efficiency_layers[0].raw_states.array[0:2])
+
+    if saveRawTensorStates:
+        for layer in efficiency_model.efficiency_layers:
+            number_states_filepath = output_filepath[0:-4]
+            number_states_filepath += '_' + layer.name + '_RawTensorStates.csv'
+            # we have to estimate the byte-encoded bit length of tensor's number of channels
+            num_bytes_stored = len(list(layer.state_ids()[0]))
+            with open(number_states_filepath, 'w') as fh:
+                # 1st row with byte indices plus count/frequency
+                for index1 in range(0, num_bytes_stored):
+                    if index1 < num_bytes_stored-1:
+                        fh.write('byteindex_{},'.format(str(index1)))
+                    else:
+                        fh.write('byteindex_{}\n'.format(str(index1)))
+                # 2nd row with min number of cols
+                fh.write('num_eval_images,{:d},'.format(num_eval_images))
+                num_neurons = layer.max_entropy()
+                fh.write('num_neurons,{:d},'.format(int(num_neurons)))
+                for i in range(4, num_bytes_stored):
+                    if i < num_bytes_stored - 1:
+                        fh.write('{},'.format(str(-1)))
+                    else:
+                        fh.write('{}\n'.format(str(-1)))
+
+                # # 1st row with min number of cols
+                # for i in range(0, num_bytes_stored,2):
+                #     fh.write('layer_name, {}, '.format(layer.name))
+                # fh.write('\n')
+                # # 2nd row with min number of cols
+                # for i in range(0, num_bytes_stored, 4):
+                #     fh.write('num_eval_images, {}, '.format(num_eval_images))
+                #     num_neurons = layer.max_entropy()
+                #     fh.write('num_neurons, {},'.format(num_neurons))
+                # fh.write('\n')
+
+                print('INFO: layer.raw_states.array.shape:', layer.raw_states.array.shape)
+                print('INFO: layer.state_count:', layer.state_count)
+                for tstate in range(0, layer.state_count):
+                #for tstate in range(0, 25): # testing
+                    temp = list(layer.raw_states.array[tstate])
+                    for index1 in range(0, len(temp)):
+                        if index1 < len(temp)-1:
+                            fh.write('{:d},'.format(int(temp[index1])) )
+                        else:
+                            fh.write('{:d}\n'.format(int(temp[index1])))
+                    #fh.write('\n')
+
+
+    #################################
+    number_states_filepath = output_filepath[0:-4]
+    number_states_filepath += '_StatesLayer.csv'
+    avg_node_util = 0
+    with open(number_states_filepath, 'a') as fh:
+        for layer in efficiency_model.efficiency_layers:
+            fh.write('{}, '.format(layer.name))
+            #fh.write('{}, {}, '.format(layer.name,layer.state_count))
+            num_neurons = layer.max_entropy()
+            #fh.write('{}, '.format(num_neurons))
+            if num_neurons <= 0:
+                print('ERROR: num_neurons <=0; ', num_neurons)
+                node_util_layer = 0.0
+            else:
+                node_util_layer = 100.0 * np.log2(layer.state_count)/float(num_neurons)
+
+            avg_node_util += node_util_layer
+            fh.write('{:.3f}, '.format(node_util_layer))
+            #print('DEBUG: Layer {} number of states: {} , neurons: {}, log-log ratio: {}'.format(layer.name,layer.state_count, num_neurons,log_log_ratio ))
+        fh.write('\n')
+        # average
+        avg_node_util = avg_node_util/float(len(efficiency_model.efficiency_layers))
+
+
+    # Calculate each layers efficiency
+    print()
+    print('evaluate_model_efficiency: Evaluating efficiency of each layer..., len(efficiency_model.efficiency_layers):', len(efficiency_model.efficiency_layers))
+    efficiency_layers_filepath = output_filepath[0:-4]
+    efficiency_layers_filepath += '_EntropyLayer.csv'
+    avg_entropy_util = 0.0
+    min_entropy_util = 100.0
+    max_entropy_util = 0.0
+    with open(efficiency_layers_filepath, 'a') as fh:
+        #fh.write(' {},'.format(label_idx)) # predicted class label
+        for layer in efficiency_model.efficiency_layers:
+            # From https://tensorstate.readthedocs.io/en/latest/Reference/Layers.html
+            # the efficiency is defined as the ratio of Shannon’s entropy to the theoretical maximum entropy
+            # # based on the number of neurons in the layer.
+            eta = 100 * layer.efficiency()
+            # eta_time = time.time() - start1
+            #print('DEBUG:Normalized Entropy Layer {} efficiency: {:.1f}% time:({:.3f}s)'.format(layer.name, eta, eta_time))
+            fh.write('{},{:.1f},'.format(layer.name,eta))
+            if eta < min_entropy_util:
+                min_entropy_util = eta
+            if eta > max_entropy_util:
+                max_entropy_util = eta
+            avg_entropy_util += eta
+
+        fh.write('\n')
+    avg_entropy_util = avg_entropy_util / len(efficiency_model.efficiency_layers)
+    print('evaluate_model_efficiency: avg_entropy_util=', avg_entropy_util)
+    # with open(efficiency_layers_filepath, 'a') as fh:
+    #     for layer in efficiency_model.efficiency_layers:
+    #         start1 = time.time()
+    #         eta = 100*layer.efficiency() # shannon entropy/max entropy
+    #         eta_time = time.time() - start1
+    #         #print('DEBUG: Normalized Entropy Layer {} efficiency [%]: {:.1f}% ({:.3f}s)'.format(layer.name,eta,eta_time))
+    #         fh.write('{}, {:.3f}, {:.3f},'.format(layer.name,eta, eta_time))
+    #
+    #     fh.write('\n')
+
+    KLefficiency_layers_filepath = output_filepath[0:-4]
+    KLefficiency_layers_filepath += '_KLdivergenceLayer.csv'
+    avg_kldiv_util = 0.0
+    min_kldiv_util = sys.float_info.max  # the largest floating point value
+    max_kldiv_util = 0.0
+    with open(KLefficiency_layers_filepath, 'a') as fh:
+        #fh.write('{},'.format(label_idx))
+        for layer in efficiency_model.efficiency_layers:
+
+            # From https://tensorstate.readthedocs.io/en/latest/Reference/Layers.html
+            # layer.counts(): This method returns a numpy.array of integers, where each integer is the number of times a state is observed.
+            num_microstates = layer.counts().sum()  # all states per layer
+            if num_microstates <=0:
+                print('ERROR: num_microstates <=0; ', num_microstates)
+                frequencies = 0
+            else:
+                frequencies = layer.counts() / num_microstates  # frequency of a state in one layer
+
+            # From https://tensorstate.readthedocs.io/en/latest/Reference/Layers.html
+            # layer.max_entropy(): The maximum entropy for the layer is equal to the number of neurons in the layer.
+            num_neurons = int(layer.max_entropy())
+
+            num_neurons = layer.max_entropy()
+            #fh.write('{}, '.format(num_neurons))
+            if num_neurons <= 0:
+                print('ERROR: num_neurons <=0; ', num_neurons)
+                eta = sys.float_info.max
+            else:
+                eta = (frequencies * (np.log2(frequencies) - (np.log2(num_predicted_classes) - num_neurons))).sum()
+
+            # uniform distribution of one of the m classes over the states =
+            # = log2(#predicted_classes/#number of states) = log2(#predicted_classes) - num_neurons
+            # the sum is over all states in layer (and per label)
+            #eta = (frequencies * (np.log2(frequencies) - (np.log2(num_predicted_classes) - num_neurons))).sum()
+
+            # print('DEBUG: KL divergence Layer {} efficiency per label: {:.1f}% ({:.3f}s)'.format(layer.name, eta, eta_time))
+            fh.write('{},{:.1f},'.format(layer.name, eta))
+            if eta < min_kldiv_util:
+                min_kldiv_util = eta
+            if eta > max_kldiv_util:
+                max_kldiv_util = eta
+            avg_kldiv_util += eta
+        fh.write('\n')
+    avg_kldiv_util = avg_kldiv_util / len(efficiency_model.efficiency_layers) # this variable used to be called global_kldivergence
+    print('avg_kldiv_util: {:.2f}'.format(avg_kldiv_util))
+
+    beta = 2 # fudge factor giving a slight bias toward accuracy over efficiency
+
+    print()
+    print('Network metrics...')
+    print('Beta: {}'.format(beta))
+
+    network_efficiency = ts.network_efficiency(efficiency_model)
+    # print('DEBUG: tensorstates')
+    # print(ts.StateCapture.states)
+
+    if network_efficiency is None:
+        print('Network efficiency is None')
+        return
+
+    print('Network efficiency: {:.2f}%'.format(100*network_efficiency))
+
+    #accuracy = np.sum(np.multiply(accuracies, nums)) / np.sum(nums)
+    print('Network accuracy: {:.2f}%'.format(100*accuracy))
+
+    aIQ = ts.aIQ(network_efficiency, accuracy, beta)
+    print('aIQ: {:.2f}%'.format(100*aIQ))
+
+    evaluate_model_efficiency_time = time.time() - start
+    summary_layers_filepath = output_filepath[0:-4]
+    summary_layers_filepath += '_KLdivergenceModel.csv'
+    with open(summary_layers_filepath, 'a') as fh:
+        #fh.write('{},'.format(label_idx))
+        # fh.write('predicted class, {},'.format(label_idx))
+        fh.write('{:.2f},'.format(min_entropy_util))
+        fh.write('{:.2f},'.format(max_entropy_util))
+        fh.write('{:.2f},'.format(avg_entropy_util))
+        fh.write('{:.2f},'.format(min_kldiv_util))
+        fh.write('{:.2f},'.format(max_kldiv_util))
+        fh.write('{:.2f},'.format(avg_kldiv_util))
+        fh.write('{:.2f},'.format(100 * accuracy))
+        fh.write('{:.2f},'.format(100 * network_efficiency))
+        fh.write('{:.2f},'.format(aIQ))
+        fh.write('{:.2f},'.format(eval_model_time))
+        fh.write('{:.3f},'.format(evaluate_model_efficiency_time))
+        fh.write('\n')
+
+# '''
+# This method computes inference over valid_dl images
+# or over npy_data_array with label_idx = all
+# '''
+
