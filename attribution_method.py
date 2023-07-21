@@ -3,12 +3,14 @@ import os
 import gc
 import skimage
 import torch
+from sklearn.metrics import confusion_matrix
 import numpy as np
-from PIL import Image, ImageStat, ImageChops
+from PIL import Image, ImageStat, ImageChops, ImageFilter
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 import time
 from my_dataset import my_dataset
+import csv
 
 from captum.attr import (
     GradientShap,
@@ -25,6 +27,7 @@ from captum.attr import (
     Occlusion,
     KernelShap,
     ShapleyValueSampling,
+    DeepLiftShap,
     LRP,
     GuidedGradCam
 )
@@ -120,7 +123,6 @@ def batch_attribution(model_filepath, img_dirPath, output_dirpath, method):
     fns = [os.path.join(img_dirPath, fn) for fn in os.listdir(img_dirPath) if
            fn.endswith(".png")]
 
-
     ################### 7-10
     num_images_used = len(fns)
     mydata = {}
@@ -189,7 +191,7 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
         # label = int(split_str[length - 3])
         # grab number from filename
         label = int(split_str[1])
-        print("Actual class label: ", label)
+        #print("class label: ", label)
     else:
         print("could not parse label")
 
@@ -203,7 +205,6 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
         integrated_gradients = IntegratedGradients(model)
 
         attribution_map = integrated_gradients.attribute(input, target=pred_label_idx, n_steps=200)
-
     if (method == 1):
         gradient_shap = GradientShap(model)
 
@@ -213,24 +214,20 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
                                                   stdevs=0.0001,
                                                   baselines=rand_img_dist,
                                                   target=pred_label_idx)
-        # default_cmap and visualization stuff here
     if (method == 2):
-        lr_lime = Lime(model)
-
-        attribution_map = lr_lime.attribute(input, target=pred_label_idx, n_samples=1)
+        # A Module ReLU(inplace=True) was detected that does not contain some of the input/output attributes that are required for DeepLift computations
+        rand_img_dist = torch.cat([input * 0, input * 1])
+        deep_lift_shap = DeepLiftShap(model)
+        attribution_map = deep_lift_shap.attribute(input,target=pred_label_idx, baselines=rand_img_dist)
     if (method == 3):
         integrated_gradients = Deconvolution(model)
-
         attribution_map = integrated_gradients.attribute(input, target=pred_label_idx)
-    if (method == 4):
+    if (method == 4):  ######
         deep_lift = DeepLift(model)
         attribution_map = deep_lift.attribute(input,target=pred_label_idx)
     if (method == 5):
         guided_backprop = GuidedBackprop(model)
         attribution_map = guided_backprop.attribute(input,target=pred_label_idx)
-    if (method == 6):
-        feature_ablation = FeatureAblation(model)
-        attribution_map = feature_ablation.attribute(input, target=pred_label_idx)
     if (method == 7):
         saliency = Saliency(model)
         # attribute returns (Tensor or tuple[Tensor, …]):
@@ -238,29 +235,12 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
     if (method == 8):
         inputxgrad = InputXGradient(model)
         attribution_map = inputxgrad.attribute(input, target=pred_label_idx)
-    if (method == 9):
-        ## sliding_window_shapes (tuple or tuple[tuple]) – Shape of patch (hyperrectangle) to occlude each input.
-        occulsion = Occlusion(model)
-        attribution_map = occulsion.attribute(input, target=pred_label_idx, sliding_window_shapes=(3,3,3))
-    if (method == 10):
-        ## sliding_window_shapes (tuple or tuple[tuple]) – Shape of patch (hyperrectangle) to occlude each input.
-        kernelShap = KernelShap(model)
-        attribution_map = kernelShap.attribute(input, target=pred_label_idx)
-    if (method == 11):
-        shapValSample = ShapleyValueSampling(model)
-        attribution_map = shapValSample.attribute(input, target=pred_label_idx)
-    if (method == 12):
-        featurePermute = FeaturePermutation(model)
-        attribution_map = featurePermute.attribute(input, target=pred_label_idx)
     if (method == 13):
         lrp = LRP(model)
         attribution_map = lrp.attribute(input, target=pred_label_idx)
     if (method == 14):
         guidedGradCam = GuidedGradCam(model) #GuidedGradCam(model, layer, device_ids=None)
         attribution_map = guidedGradCam.attribute(input, target=pred_label_idx)
-
-    #  Attributions will always be the same size as the provided inputs, with each value providing
-    #  the attribution of the corresponding input index.
 
     ## convert tensor to numpy array
     output_attribution = np.transpose(attribution_map.squeeze().cpu().detach().numpy(), (1, 2, 0))
@@ -275,26 +255,107 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
         ## min max normalization ( [0,1] ) * 255
         output_attribution = 255 * (output_attribution - minvalue) / (maxvalue - minvalue)
 
-    PIL_image = Image.fromarray(output_attribution.astype('uint8'), 'L')
+    attribution_map = Image.fromarray(output_attribution.astype('uint8'), 'L')
 
     output_filepath = os.path.join(output_dirpath, baseName)
-    im1 = PIL_image.save(output_filepath)
+    im1 = attribution_map.save(output_filepath)
 
-    ##
+    ######## GENERATE BINARIZED ATTRIBUTION MAP
+
+    ##read in corresponding ground truth mask ###########
+    ## eg. attribution map = "class_0_example_0" , mask_name = "class_0_example_0_mask"
+    ground_truth_path = os.path.join(output_dirpath, "ground_truth/")
 
 
+    fnsGroundTruth = [os.path.join(ground_truth_path, fn) for fn in os.listdir(ground_truth_path) if
+                      fn[:-4] in basename]
 
-    ## generate binarized mask
-    mean = ImageStat.Stat(PIL_image).mean[0]
-    stdev = ImageStat.Stat(PIL_image).stddev[0]
-    threshold = math.ceil(mean) + math.ceil(stdev)
+    ground_truth_map = Image.open(fnsGroundTruth[0])
 
-    # threshold = 127
-    bin_map = PIL_image.point(lambda p: 255 if p > threshold else 0)
+    mean = ImageStat.Stat(attribution_map).mean[0]
+    stdev = ImageStat.Stat(attribution_map).stddev[0]
+
+    ground_truth_array = np.array(ground_truth_map, dtype=np.int_)
+    ground_truth_array_orig = np.array(ground_truth_map, dtype=np.int_)
+
+    ## threshold ground truth map to [0,1] if not already done
+    if ground_truth_array.max() == 255:
+        ground_truth_thresh = ground_truth_map.point(lambda p: 1 if p == 255 else 0)
+        ground_truth_array = np.array(ground_truth_thresh)
+
+    fin_map = []
+    ##shape of k: ndarray(256,)
+
+    flatAttrib = np.array(attribution_map)
+    for k, kVal in enumerate(ground_truth_array):
+        entry = []
+
+        currRow = flatAttrib[k]
+        for p, pixVal in enumerate(kVal.flatten()):
+            ## mask from ROI generates b/w image using [0,255], not [0,1]
+            val = 0
+            if mean - pixVal * stdev <= currRow[p] <= mean + pixVal * stdev:
+                val = 255
+            entry.append(val)
+        fin_map.append(entry)
+
+    bin_map_attrib_array = np.array(fin_map)
+    bin_image = Image.fromarray(bin_map_attrib_array.astype('uint8'), 'L')
 
     out_filepath2 = os.path.join(output_dirpath + "/bin_map/", baseName)
-    im2 = bin_map.save(out_filepath2)
+    im2 = bin_image.save(out_filepath2)
 
+    rounding_precision = 4
+
+    ## confusion_matrix(y_true, y_pred, *, labels=None, ...)
+    #tn, fp, fn, tp = confusion_matrix(bin_map_attrib_array.ravel(), bin_map_attrib_array.ravel(), labels=[0,255]).ravel()
+
+    tn, fp, fn, tp = confusion_matrix(ground_truth_array_orig.ravel(), bin_map_attrib_array.ravel(), labels=[0,255]).ravel()
+    print("tn, fp, fn, tp: ", tn, fp, fn, tp)
+    # derive metrics from confusion matrix
+    if (2 * tp + fp + fn) <= 0:
+        print('ERROR: sum of ((2*tp + fp + fn) is zero ')
+        dice_index = -1.0
+        print("dice_index: ", dice_index)
+    else:
+        dice_index = round((2 * tp / (2 * tp + fp + fn)), rounding_precision)
+        print("dice_index: ", dice_index)
+    if (fp + fn + tp) <= 0:
+        print('ERROR: sum of (fp + fn + tp) is zero ')
+        jaccard_index = -1.0
+        print("jaccard_index: ", jaccard_index)
+    else:
+        jaccard_index = round((tp / (fp + fn + tp)), rounding_precision)
+        print("jaccard_index: ", jaccard_index)
+    if (fp + fn) <= 0:
+        print('ERROR: sum of ((fp + fn) is zero ')
+        cosine_index = -1.0
+        print("cosine_index: ", cosine_index)
+    else:
+        cosine_index = round((tp / (np.sqrt(fp + fn))), rounding_precision)
+        print("cosine_index: ", cosine_index)
+
+    # name of csv file
+
+    filename = "result.csv"
+    csv_dirpath = os.path.join(output_dirpath, "metrics")
+    csv_filepath = os.path.join(csv_dirpath, filename)
+
+    if not (os.path.exists(csv_dirpath)):
+        os.makedirs(csv_dirpath)
+        with open(csv_filepath, 'a') as csvfile:
+            # creating a csv writer object
+            csvwriter = csv.writer(csvfile)
+            csvwriter.writerow(["Filename", "Dice", "Jaccard", "Cosine"])
+
+
+    # writing to csv file
+    with open(csv_filepath, 'a') as csvfile:
+        # creating a csv writer object
+        csvwriter = csv.writer(csvfile)
+
+        # writing the data rows
+        csvwriter.writerow([baseName , str(dice_index), str(jaccard_index), str(cosine_index)])
 
 def main(model_f_path, img_dirPath, result_dirpath, method):
     batch_attribution(model_f_path, img_dirPath, result_dirpath, method)
@@ -318,7 +379,6 @@ def preprocess_round3(img):
     # convert image to a gpu tensor
     # batch_data = torch.FloatTensor(img)
     return img
-
 def preprocess_round4(img):
     # NOTE: this is taked from https://raw.githubusercontent.com/usnistgov/trojai-example/round4/fake_trojan_detector.py
     # TODO verify that this line can be skipped for PIL loader!!!!
@@ -341,27 +401,5 @@ def preprocess_round4(img):
     # batch_data = torch.from_numpy(img).cuda()
     return img
 
-def compareMaps(img_dir, img_dir2, result_dirpath):
-
-    # create the output folder if it does not exist
-    if os.path.exists(result_dirpath):
-        print('INFO: output_dirpath:', result_dirpath, ' already exists')
-    else:
-        os.makedirs(result_dirpath)
 
 
-    fns = [os.path.join(img_dir, fn) for fn in os.listdir(img_dir) if
-           fn.endswith(".png")]
-
-    ## img 2 is binary map
-    for f in fns:
-        baseName = os.path.basename(f)
-        comp_image = os.path.join(img_dir2, baseName)
-
-        img1 = Image.open(f)
-        img2 = Image.open(comp_image)
-
-        diff = ImageChops.difference(img1, img2)
-
-        if diff.getbbox():
-            diff.show()
