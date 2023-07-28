@@ -12,27 +12,26 @@ __maintainer__ = "Peter Bajcsy"
 __email__ = "peter.bajcsy@nist.gov"
 __status__ = "Research"
 
-import json
 import os
 import time
 import torch
-import numpy as np
-#import class_efficiency
 import attribution_method
-import csv
-
 
 """
 This class is designed to loop over a folders containing AI models and training images provided
 for the TrojAI Round 1-3 Challenge - see https://pages.nist.gov/trojai/docs/data.html#round-2
 """
 
-
-def batch_efficiency(model_dirpath, result_dirpath, model_format='.pt', example_img_format='png'):
+##img_dir is a subdirectory in model_dirpath with a batch of images to run
+def batch_efficiency(model_dirpath, result_dirpath, method, img_dir, model_format='.pt', example_img_format='png'):
     print('model_dirpath = {}'.format(model_dirpath))
     print('result_filepath = {}'.format(result_dirpath))
+
+    print('img_dir = {}'.format(img_dir))
+
     print('model_format = {}'.format(model_format))
     print('example_img_format = {}'.format(example_img_format ))
+    print('method = {}'.format(method))
 
     # Identify all models in directories--up
     model_dir_names = os.listdir(model_dirpath)
@@ -61,11 +60,17 @@ def batch_efficiency(model_dirpath, result_dirpath, model_format='.pt', example_
 
     examples_dirpath = []
     idx = 0
+
+    ## loop through all files in model folder
+
     for fn in model_dir_names:
         model_dirpath1 = os.path.join(model_dirpath, fn)
         if not os.path.isdir(model_dirpath1):
             continue
-        examples_dirpath1 = os.path.join(model_dirpath, fn, 'clean_example_data/')
+
+        #examples_dirpath1 = os.path.join(model_dirpath, fn, 'poisoned_example_data/')
+        ## image folder is a subdirectory of model file
+        examples_dirpath1 = os.path.join(model_dirpath, fn, '{}/'.format(img_dir))
         # check if examples_dirpath1 exists
         isdir = os.path.isdir(examples_dirpath1 )
         if not isdir:
@@ -73,30 +78,6 @@ def batch_efficiency(model_dirpath, result_dirpath, model_format='.pt', example_
 
         examples_dirpath.append(examples_dirpath1)
         idx = idx + 1
-
-    # TODO : added poisoned dir
-
-    poison_dirpath = []
-
-    ind = 0
-    for fn in model_dir_names:
-        model_dirpath1 = os.path.join(model_dirpath, fn)
-        if not os.path.isdir(model_dirpath1):
-            continue
-        poison_dirpath1 = os.path.join(model_dirpath, fn, 'poisoned_example_data/')
-        # check if examples_dirpath1 exists
-        isdir = os.path.isdir(poison_dirpath1)
-        if not isdir:
-            continue
-
-        print("poisioned directory: ", poison_dirpath1)
-        poison_dirpath.append(poison_dirpath1)
-        ind = ind + 1
-
-    number_of_poisondir = ind
-    print('number of poisoned dirs:', number_of_poisondir, '\n')
-
-    ####################
 
     number_of_exampledir = idx
     print('number of example dirs:', number_of_exampledir, '\n')
@@ -120,10 +101,8 @@ def batch_efficiency(model_dirpath, result_dirpath, model_format='.pt', example_
         ##################
         # run the efficiency measurement
 
-        # attribution_comparison.main(array_model_dir_names[idx], model_filepath[idx], examples_dirpath[idx], poison_dirpath[idx], result_dirpath,
-        #                        example_img_format) #kb
-
-        attribution_method.main(model_filepath[idx], examples_dirpath[idx], result_dirpath)
+        ## for loop on this several times changing the method each time
+        attribution_method.main(model_filepath[idx], examples_dirpath[idx], result_dirpath, method)
 
         end1 = time.time()
         print('model: ', array_model_dir_names[idx])
@@ -157,12 +136,18 @@ if __name__ == "__main__":
     parser.add_argument('--image_format', type=str,
                         help='Exampple image file format (suffix)  which might be useful for filtering a folder containing axample files.',
                         required=False)
+    parser.add_argument('--method', type=int,
+                        help='Method number (see attribution_method)',
+                        required=True)
+    parser.add_argument('--image_dir', type=str,
+                        help='image_dir is the name of a subdirectory in model_dirpath with a batch of images to run',
+                        required=True)
 
     args = parser.parse_args()
-    print('args %s \n % s \n %s \n %s \n' % (
-        args.model_dirpath, args.output_dirpath, args.model_format, args.image_format))
+    print('args %s \n % s \n %s \n %s \n %s \n' % (
+        args.model_dirpath, args.output_dirpath, args.model_format, args.image_format, args.method))
 
-    batch_efficiency(args.model_dirpath, args.output_dirpath)
+    batch_efficiency(args.model_dirpath, args.output_dirpath, method=args.method, img_dir=args.image_dir)
 
     # example inputs:
     # --model_dirpath     C:\PeterB\Projects\TrojAI\nn-efficiency-metrics\data\models0to1_nisaba
