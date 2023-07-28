@@ -1,48 +1,42 @@
-import math
+
 import os
 import gc
-import skimage
-import torch
-from sklearn.metrics import confusion_matrix
-import numpy as np
-from PIL import Image, ImageStat, ImageChops, ImageFilter
-import torch.nn.functional as F
-import torchvision.transforms as transforms
-import time
-from my_dataset import my_dataset
 import csv
+import time
+import torch
+import skimage
+import numpy as np
+import torch.nn.functional as F
+from PIL import Image, ImageStat
+import torchvision.transforms as transforms
+from sklearn.metrics import confusion_matrix
+
+
+from my_dataset import my_dataset
+
+import matplotlib.pyplot as plt
 
 from captum.attr import (
     GradientShap,
-    Lime,
-    LimeBase,
     IntegratedGradients,
     Deconvolution,
     DeepLift,
     GuidedBackprop,
-    FeatureAblation,
-    FeaturePermutation,
     Saliency,
     InputXGradient,
-    Occlusion,
-    KernelShap,
-    ShapleyValueSampling,
     DeepLiftShap,
     LRP,
-    GuidedGradCam
+    GuidedGradCam,
 )
 
 dev = torch.device("cpu")
 
 def eval_model(model, test_loader, dev, which_round):
-    # model.to(dev)
-    # model.eval()
 
     final_accuracy = 0
     final_num = 0
     with torch.no_grad():
         for i in range(0, len(test_loader.dataset.labels)):
-            #label = test_loader.dataset.__getitem__(i)
             labels = []
             labels.append(test_loader.dataset.labels[i])
             # prepare input batch
@@ -107,7 +101,6 @@ def batch_attribution(model_filepath, img_dirPath, output_dirpath, method):
 
     # Set the device to run the model on (gpu if available, cpu otherwise)
     dev = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-
     dev = "cpu"
 
     if dev != 'cpu':
@@ -119,22 +112,18 @@ def batch_attribution(model_filepath, img_dirPath, output_dirpath, method):
     model.to(dev)
     model = model.eval()
 
-
     fns = [os.path.join(img_dirPath, fn) for fn in os.listdir(img_dirPath) if
            fn.endswith(".png")]
 
-    ################### 7-10
     num_images_used = len(fns)
     mydata = {}
     mydata['test'] = my_dataset(fns)
     valid_dl = torch.utils.data.DataLoader(mydata['test'], batch_size=num_images_used, shuffle=True,
                                            pin_memory=True, num_workers=1)
-
     which_round = 4
-
     eval_model(model, valid_dl, dev, which_round)
 
-    ################################
+
     start = time.time()
 
 
@@ -155,13 +144,11 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
         std=[0.229, 0.224, 0.225]
     )
 
-    #inputFilename = r'C:\Users\krb8\PycharmProjects\captum\class_0_example_0.png'
     img = Image.open(inputFilename)
     baseName = os.path.basename(inputFilename)
     print(baseName)
 
     transformed_img = transform(img)
-
     input = transform_normalize(transformed_img)
     input = input.unsqueeze(0)
 
@@ -169,16 +156,12 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
     with torch.no_grad():
         output = model(input)
 
-
     ## softmax: It is applied to all slices along dim,
     # and will re-scale them so that the elements lie in the range [0, 1] and sum to 1
     output = F.softmax(output, dim=1)
 
-    predMax= np.argmax(output[0])
     # Returns the k largest elements of the given input tensor along a given dimension.
     prediction_score, pred_label_idx = torch.topk(output, 1)
-
-
     pred_label_idx = pred_label_idx[0]
     print("predicted label index: ", pred_label_idx)
 
@@ -199,8 +182,6 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
     ##########################################################
 
     # Initialize the attribution algorithm with the model
-
-    # method = 3
     if(method == 0):
         integrated_gradients = IntegratedGradients(model)
 
@@ -244,7 +225,6 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
 
     ## convert tensor to numpy array
     output_attribution = np.transpose(attribution_map.squeeze().cpu().detach().numpy(), (1, 2, 0))
-
     output_attribution = output_attribution[ :, :, 2]
     minvalue = output_attribution.min()
     maxvalue = output_attribution.max()
@@ -258,14 +238,13 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
     attribution_map = Image.fromarray(output_attribution.astype('uint8'), 'L')
 
     output_filepath = os.path.join(output_dirpath, baseName)
-    im1 = attribution_map.save(output_filepath)
+    attribution_map.save(output_filepath)
 
     ######## GENERATE BINARIZED ATTRIBUTION MAP
 
     ##read in corresponding ground truth mask ###########
     ## eg. attribution map = "class_0_example_0" , mask_name = "class_0_example_0_mask"
     ground_truth_path = os.path.join(output_dirpath, "ground_truth/")
-
 
     fnsGroundTruth = [os.path.join(ground_truth_path, fn) for fn in os.listdir(ground_truth_path) if
                       fn[:-4] in basename]
@@ -294,7 +273,7 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
         for p, pixVal in enumerate(kVal.flatten()):
             ## mask from ROI generates b/w image using [0,255], not [0,1]
             val = 0
-            if mean - pixVal * stdev <= currRow[p] <= mean + pixVal * stdev:
+            if mean - pixVal * stdev <= currRow[p] and currRow[p] <= mean + pixVal * stdev:
                 val = 255
             entry.append(val)
         fin_map.append(entry)
@@ -309,8 +288,8 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
 
     ## confusion_matrix(y_true, y_pred, *, labels=None, ...)
     #tn, fp, fn, tp = confusion_matrix(bin_map_attrib_array.ravel(), bin_map_attrib_array.ravel(), labels=[0,255]).ravel()
-
-    tn, fp, fn, tp = confusion_matrix(ground_truth_array_orig.ravel(), bin_map_attrib_array.ravel(), labels=[0,255]).ravel()
+    cnf_matrix = confusion_matrix(ground_truth_array_orig.ravel(), bin_map_attrib_array.ravel(), labels=[0,255])
+    tn, fp, fn, tp = cnf_matrix.ravel()
     print("tn, fp, fn, tp: ", tn, fp, fn, tp)
     # derive metrics from confusion matrix
     if (2 * tp + fp + fn) <= 0:
@@ -357,6 +336,19 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
         # writing the data rows
         csvwriter.writerow([baseName , str(dice_index), str(jaccard_index), str(cosine_index)])
 
+    fig, ax = plt.subplots(figsize=(7.5, 7.5))
+    ax.matshow(cnf_matrix, cmap=plt.cm.Blues, alpha=0.3)
+    for i in range(cnf_matrix.shape[0]):
+        for j in range(cnf_matrix.shape[1]):
+            ax.text(x=j, y=i, s=cnf_matrix[i, j], va='center', ha='center', size='xx-large')
+
+    plt.xlabel('Predictions', fontsize=18)
+    plt.ylabel('Actuals', fontsize=18)
+    plt.title('Confusion Matrix', fontsize=18)
+    plt.savefig(os.path.join(csv_dirpath, "matrix_{}.png".format( baseName )), dpi='figure', format="png")
+
+
+
 def main(model_f_path, img_dirPath, result_dirpath, method):
     batch_attribution(model_f_path, img_dirPath, result_dirpath, method)
 
@@ -400,6 +392,7 @@ def preprocess_round4(img):
     # convert image to a gpu tensor
     # batch_data = torch.from_numpy(img).cuda()
     return img
+
 
 
 
