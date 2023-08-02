@@ -127,9 +127,11 @@ def batch_attribution(model_filepath, img_dirPath, output_dirpath, method):
 
     for f in fns:
         multiple_attribution(f, model, output_dirpath, method)
+        #multiple_attribution_evaluation(f, output_dirpath)
 
     end = time.time()
     print("Total time: ", end - start)
+
 
 def multiple_attribution(inputFilename, model, output_dirpath, method):
     transform = transforms.Compose([
@@ -238,11 +240,14 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
     output_filepath = os.path.join(output_dirpath, baseName)
     attribution_map.save(output_filepath)
 
+
     ######## GENERATE BINARIZED ATTRIBUTION MAP
 
     ##read in corresponding ground truth mask ###########
     ## eg. attribution map = "class_0_example_0" , mask_name = "class_0_example_0_mask"
-    ground_truth_path = os.path.join(output_dirpath, "ground_truth/")
+
+    #ground_truth_path = os.path.join(output_dirpath, "ground_truth")
+    ground_truth_path = os.path.join(output_dirpath, "ground_truth_polygon")
 
     fnsGroundTruth = [os.path.join(ground_truth_path, fn) for fn in os.listdir(ground_truth_path) if
                       fn[:-4] in basename]
@@ -252,22 +257,18 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
     mean = ImageStat.Stat(attribution_map).mean[0]
     stdev = ImageStat.Stat(attribution_map).stddev[0]
     #
-    ground_truth_array = np.array(ground_truth_map, dtype=np.int_)
+    #ground_truth_array = np.array(ground_truth_map, dtype=np.int_)
     ground_truth_array_orig = np.array(ground_truth_map, dtype=np.int_)
-    #
-    # ## threshold ground truth map to [0,1] if not already done
-    # if ground_truth_array.max() == 255:
-    #     ground_truth_thresh = ground_truth_map.point(lambda p: 1 if p == 255 else 0)
-    #     ground_truth_array = np.array(ground_truth_thresh)
+
 
     fin_map = []
 
     flatAttrib = np.array(attribution_map)
 
-    for p, Val in enumerate(flatAttrib.flatten()):
+    for p, pixI in enumerate(flatAttrib.flatten()):
         ## mask from ROI generates b/w image using [0,255], not [0,1]
         val = 0
-        if mean - stdev <= Val and Val <= mean + stdev:
+        if mean - stdev > pixI or pixI > mean + stdev:
             val = 255
         fin_map.append(val)
 
@@ -341,9 +342,135 @@ def multiple_attribution(inputFilename, model, output_dirpath, method):
     plt.savefig(os.path.join(csv_dirpath, "matrix_{}.png".format( baseName )), dpi='figure', format="png")
 
 
+def batch_multiple_attribution_evaluation(inputAttributionDir, output_dirpath):
+    attribution_files = [os.path.join(inputAttributionDir, fn) for fn in os.listdir(inputAttributionDir)]
 
-def main(model_f_path, img_dirPath, result_dirpath, method):
-    batch_attribution(model_f_path, img_dirPath, result_dirpath, method)
+    for f in attribution_files:
+        if os.path.isfile(f):
+            multiple_attribution_evaluation(f, output_dirpath)
+
+
+def multiple_attribution_evaluation(inputAttributionFilename, output_dirpath):
+    baseName = os.path.basename(inputAttributionFilename)
+    attribution_map = Image.open(inputAttributionFilename)
+    mean = ImageStat.Stat(attribution_map).mean[0]
+    stdev = ImageStat.Stat(attribution_map).stddev[0]
+
+    attribution_map = np.asarray(attribution_map)
+
+
+    ######## GENERATE BINARIZED ATTRIBUTION MAP
+    ground_truth_path = os.path.join(output_dirpath, "ground_truth")
+
+    fnsGroundTruth = [os.path.join(ground_truth_path, fn) for fn in os.listdir(ground_truth_path) if
+                      fn[:-4] in baseName]
+
+    ground_truth_map = Image.open(fnsGroundTruth[0])
+
+    #ground_truth_array_orig = np.array(ground_truth_map, dtype=np.int_)
+    ground_truth_array_orig = np.asarray(ground_truth_map, dtype=np.int_)
+
+    fin_map = []
+
+    flatAttrib = np.array(attribution_map)
+
+    for p, pixI in enumerate(flatAttrib.flatten()):
+        ## mask from ROI generates b/w image using [0,255], not [0,1]
+        val = 0
+        if mean - stdev > pixI or pixI > mean + stdev:
+            val = 255
+        fin_map.append(val)
+
+    bin_map_attrib_array = np.array(fin_map).reshape((256,256))
+    bin_image = Image.fromarray(bin_map_attrib_array.astype('uint8'), 'L')
+
+    out_filepath2 = os.path.join(output_dirpath + "/bin_map/", baseName)
+    bin_image.save(out_filepath2)
+
+    rounding_precision = 4
+
+    ## TPR for polygon ground truth
+
+    if ground_truth_array_orig.shape != bin_map_attrib_array.shape:
+        ground_truth_array_orig =Image.open(fnsGroundTruth[0]).convert("L")
+        ground_truth_array_orig = np.array(ground_truth_array_orig)
+        #ground_truth_array_orig = ground_truth_array_orig.reshape((256,256))
+
+    ## confusion_matrix(y_true, y_pred, *, labels=None, ...)
+    cnf_matrix = confusion_matrix(ground_truth_array_orig.ravel(), bin_map_attrib_array.ravel(), labels=[0,255])
+    tn, fp, fn, tp = cnf_matrix.ravel()
+    print("tn, fp, fn, tp: ", tn, fp, fn, tp)
+    # derive metrics from confusion matrix
+    if (2 * tp + fp + fn) <= 0:
+        print('ERROR: sum of ((2*tp + fp + fn) is zero ')
+        dice_index = -1.0
+        print("dice_index: ", dice_index)
+    else:
+        dice_index = round((2 * tp / (2 * tp + fp + fn)), rounding_precision)
+        print("dice_index: ", dice_index)
+    if (fp + fn + tp) <= 0:
+        print('ERROR: sum of (fp + fn + tp) is zero ')
+        jaccard_index = -1.0
+        print("jaccard_index: ", jaccard_index)
+    else:
+        jaccard_index = round((tp / (fp + fn + tp)), rounding_precision)
+        print("jaccard_index: ", jaccard_index)
+    if (fp + fn) <= 0:
+        print('ERROR: sum of ((fp + fn) is zero ')
+        cosine_index = -1.0
+        print("cosine_index: ", cosine_index)
+    else:
+        cosine_index = round((tp / (np.sqrt(fp + fn))), rounding_precision)
+        print("cosine_index: ", cosine_index)
+    if tp / ( tp + fn ) <= 0:
+
+        print("ERROR: TPR is ",  tp / ( tp + fn ))
+        tpr = -1.0
+    else:
+
+        tpr = tp/(tp + fn)
+        print("TPR: ", tpr)
+
+
+
+    # name of csv file
+
+    filename = "result.csv"
+    csv_dirpath = os.path.join(output_dirpath, "metrics_polygon")
+    csv_filepath = os.path.join(csv_dirpath, filename)
+
+    if not (os.path.exists(csv_dirpath)):
+        os.makedirs(csv_dirpath)
+        with open(csv_filepath, 'a') as csvfile:
+            # creating a csv writer object
+            csvwriter = csv.writer(csvfile)
+
+            csvwriter.writerow(["Filename", "Dice", "Jaccard", "Cosine", "TPR"])
+
+
+
+    # writing to csv file
+    with open(csv_filepath, 'a') as csvfile:
+        # creating a csv writer object
+        csvwriter = csv.writer(csvfile)
+
+        # writing the data rows
+
+        csvwriter.writerow([baseName, str(dice_index), str(jaccard_index), str(cosine_index), str(tpr)])
+
+
+
+    fig, ax = plt.subplots(figsize=(7.5, 7.5))
+    ax.matshow(cnf_matrix, cmap=plt.cm.Blues, alpha=0.3)
+    for i in range(cnf_matrix.shape[0]):
+        for j in range(cnf_matrix.shape[1]):
+            ax.text(x=j, y=i, s=cnf_matrix[i, j], va='center', ha='center', size='xx-large')
+
+    plt.xlabel('Predictions', fontsize=18)
+    plt.ylabel('Actuals', fontsize=18)
+    plt.title('Confusion Matrix', fontsize=18)
+    plt.savefig(os.path.join(csv_dirpath, "matrix_{}.png".format( baseName )), dpi='figure', format="png")
+
 
 def preprocess_round3(img):
     # code from trojai example
@@ -386,5 +513,24 @@ def preprocess_round4(img):
     # batch_data = torch.from_numpy(img).cuda()
     return img
 
+if __name__ == "__main__":
+    import argparse
+
+    print('torch version: %s \n' % (torch.__version__))
+
+    parser = argparse.ArgumentParser(
+        description='Efficiency estimator of AI Models to Demonstrate dependency on the number of predicted classes.')
+    parser.add_argument('--output_dirpath', type=str,
+                        help='Directory path  where output result should be written.', required=True)
+    parser.add_argument('--image_dir', type=str,
+                        help='image_dir is the name of a subdirectory in attribution maps with a batch of images to run',
+                        required=True)
+
+    args = parser.parse_args()
+    print('args %s \n % s \n' % (
+         args.output_dirpath,  args.image_dir))
+
+    batch_multiple_attribution_evaluation(args.image_dir, args.output_dirpath)
+    #multiple_attribution_evaluation(args.image_dir, args.output_dirpath )
 
 
